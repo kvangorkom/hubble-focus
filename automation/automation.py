@@ -7,7 +7,15 @@ from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 import numpy as np
 from photutils import aperture_photometry, daofind, CircularAnnulus, DAOStarFinder
+from scipy import spatial
 from scipy.optimize import leastsq, least_squares
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+
+import logging
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 # --- Automated Source Finding ---
 
@@ -20,13 +28,14 @@ class FocusImage(object):
         self.image_header = self.fits_file[extension].header
         self.fits_header = self.fits_file[0].header
         self.extension = extension
+        self.filepath = filepath
         
         self.sources = None
         self.backgrounds = None
         self.mean = None
         self.median = None
         self.std = None
-        
+
     def find_sources(self,clobber=False,*args,**kwargs):
         '''See find_sources for documentation'''
         sources, mean, median, std = find_sources(self.image,
@@ -53,9 +62,23 @@ class FocusImage(object):
         
     def extract_psf(self,source_index,*args,**kwargs):
         return extract_psf(self.image,self.sources[source_index],
-                           *args,**kwargs)        
+                           *args,**kwargs)
 
-def find_sources(image,sigma=5.,iters=1,threshold=50.,fwhm=2.,isolation=30.,edge_distance=15.,sigma_radius=1.5,mean=None,median=None,std=None,xyslice=None):
+    def display_image(self, figsize=(10, 5)):
+        shifted = self.image - self.image.min()
+        median = np.nanmedian(shifted)
+        std = np.nanstd(shifted)
+
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        ax.imshow(shifted, cmap='Greys_r' ,vmin=median-0.1*std, vmax=median+0.5*std, interpolation='nearest')
+        if self.sources is not None:
+            ax.plot(self.sources[:,0], self.sources[:,1], 'o', mfc='none', ms=4) #facecolors='none'
+            ax.set_xlim(0,self.image.shape[1])
+            ax.set_ylim(0,self.image.shape[0])
+        return fig, ax        
+
+def find_sources(image,sigma=5.,iters=1,threshold=50.,fwhm=2.,isolation=30.,edge_distance=15.,sigma_radius=1.5,
+    mean=None,median=None,std=None,xyslice=None,roundlo=-1.,roundhi=1.,peak_threshold=None):
     '''
     Find sources in an iamge with DAOStarFinder and eliminate any that don't meet
     some isolation criterion and any that fall too close the edge of the image.
@@ -89,7 +112,8 @@ def find_sources(image,sigma=5.,iters=1,threshold=50.,fwhm=2.,isolation=30.,edge
     #full image stats followed by first pass at star finding
     if mean is None or median is None or std is None:
         mean, median, std = sigma_clipped_stats(image[xyslice],sigma=sigma,iters=iters)
-    finder = DAOStarFinder(threshold=threshold*std,fwhm=fwhm,sigma_radius=sigma_radius)
+    finder = DAOStarFinder(threshold=threshold*std,fwhm=fwhm,sigma_radius=sigma_radius,
+                           roundlo=roundlo,roundhi=roundhi)
     sources = finder(image-median)
     
     #eliminate sources that don't meet some isolation criterion
@@ -106,7 +130,11 @@ def find_sources(image,sigma=5.,iters=1,threshold=50.,fwhm=2.,isolation=30.,edge
     right = xy[:,0] >= image.shape[1] - edge_distance
     good_inds = lowerleft | upper | right
     good_sources = xy[~good_inds]
-    
+
+    if peak_threshold is not None:
+        to_keep = np.asarray([np.nanmax(extract_psf(image, source) > peak_threshold) for source in good_sources])
+        good_sources = good_sources[to_keep]
+
     return good_sources, mean, median, std
     
 def find_backgrounds(image,sources,inner_radius=10.,outer_radius=15.):
@@ -157,11 +185,64 @@ def find_common_sources(sources1,sources2,maxsep=2.,return_indices=False):
         common2 = sources2[matches] # sources in sources2 that have matches in sources1
         return common1, common2
 
+def match_many_source_lists(reference,list_of_lists,offset=None,return_indices=False,maxsep=2.0):
+    '''
+    Return only the sources found in a reference list that
+    can also be found in all lists.
+
+    There's probably a cleaner way to do this, but
+    the approach here is to make two passes through:
+    1. Find the subset of references sources that
+    are present in all other lists
+    2. Match this subset to the right indices
+    in each list in list_of_lists
+    '''
+
+    subset = []
+    for i,l in enumerate(list_of_lists):
+        if offset is not None:
+            l = deepcopy(l)
+            l += offset[i]
+        idx1,_ = find_common_sources(reference,l,return_indices=True,maxsep=maxsep)
+        subset.append(idx1)
+    common = np.all(subset,axis=0)
+    reference_subset = reference[common]
+    
+    list_indices = []
+    for i,l in enumerate(list_of_lists):
+        if offset is not None:
+            l = deepcopy(l)
+            l += offset[i]
+        _,list_index = find_common_sources(reference_subset,l,return_indices=True,maxsep=maxsep)
+        list_indices.append(list_index)
+    
+    if return_indices:
+        return common, list_indices
+    else:
+        return reference_subset, [l[idx] for l,idx in zip(list_of_lists,list_indices)]
+
 
 # --- Automate fitpsf with multiprocessing ---
 
 def multifitpsf(imlist, sourcexy, sourcebg, infile, spatial_funcs = {}, nprocesses=8):
     #Can handle single and multi-image fits.
+
+    # Single image gets placed in single-element list
+    if isinstance(imlist, str):
+        imlist = [imlist, ]
+    imlist = [os.path.splitext(im)[0] for im in imlist] # remove extensions
+
+    # Need to reshape sources and backgrounds to follow: (nstars x nfiles x coords/bg)
+    # The expectation is that the user will pass in a list of that follows: (nfiles x nstars x coords/bg)
+    # or (nstars x coords/bg)
+    sourcexy = np.asarray(sourcexy)
+    sourcebg = np.asarray(sourcebg)
+    if np.ndim(sourcexy) < 3:
+        sourcexy = np.expand_dims(sourcexy,0)
+    if np.ndim(sourcebg) < 2:
+        sourcebg = np.expand_dims(sourcebg,0)
+    sourcexy = sourcexy.swapaxes(0,1)
+    sourcebg = sourcebg.swapaxes(0,1)
 
     #for each process, create a tmp directory
     #in each directory, create a dowfc.pro that
@@ -173,6 +254,7 @@ def multifitpsf(imlist, sourcexy, sourcebg, infile, spatial_funcs = {}, nprocess
         if os.path.exists(tmpname):
             shutil.rmtree(tmpname)
         os.mkdir(tmpname)
+        log.info('Creating temporary directory {}'.format(tmpname))
         
         #copy fits files over
         for im in imlist:
@@ -208,7 +290,14 @@ def multifitpsf(imlist, sourcexy, sourcebg, infile, spatial_funcs = {}, nprocess
     for d in tmpdirs:
         shutil.rmtree(d)
         
-    return np.vstack([r for r in results if len(r) > 0]) # reject any empty results
+    stacked_results = np.vstack([r for r in results if len(r) > 0]) # reject any empty results
+
+    # Turn into numpy record array
+    newkeys = ['filename','x','y']
+    newkeys.extend(list(infile.__dict__.keys())[7:])
+    keytype = [stacked_results.T[0].astype(str).dtype,] # get string of right length for filenames
+    keytype.extend( [float,] * (len(newkeys) - 1) )
+    return np.core.records.fromarrays(stacked_results.T, dtype = [(key, ktype) for key, ktype in zip(newkeys, keytype)])
         
 def worker(args):
     return fitpsf_process(*args)
@@ -221,14 +310,14 @@ def fitpsf_process(script,dirname,images,stars,bgs,parameters,spatial_funcs):
 
     nstars = stars.shape[0]
 
-    print('FITS files: ' + str(files))
-    print('Fitting PSFs for {n} stars.'.format(n = nstars))
+    log.info('FITS files: ' + str(files))
+    log.info('Fitting PSFs for {n} stars.'.format(n = nstars))
 
     data = []
     #Loop through the stars
     for i,s in enumerate(stars):
         #Produce the .cos (bad pixels) and .dat (xpos,ypos, background) files that mkfocusin expects
-        print('Producing .cos and .dat files...')
+        log.info('Producing .cos and .dat files...')
         for j,f in enumerate(files):
             x = s[j][0]
             y = s[j][1]
@@ -255,11 +344,11 @@ def fitpsf_process(script,dirname,images,stars,bgs,parameters,spatial_funcs):
                 #write out
                 parameters.to_file(os.path.join(dirname,'list.in'))
 
-        print('Fitting star [{x},{y}] ({i}/{nstars})'.format(x=s[j][0],y=s[j][1],i=i+1,nstars=nstars))
-        print('Running fitpsf...')
+        log.info('Fitting star [{x},{y}] ({i}/{nstars})'.format(x=s[j][0],y=s[j][1],i=i+1,nstars=nstars))
+        log.info('Running fitpsf...')
         run_idl_script('@'+script)
         #call focusresults
-        #print('Running focusresults...')
+        #log.info('Running focusresults...')
         #run_idl_script('focusresults, {}'.format('dowfc_list'))
         try:
             #Save results
@@ -267,7 +356,7 @@ def fitpsf_process(script,dirname,images,stars,bgs,parameters,spatial_funcs):
             #Remove old .par files to avoid doubling entries in results.txt
             os.remove(os.path.join(dirname,'list.par'))
         except FileNotFoundError:
-            print('Couldn\'t find .par file! Fit must have failed. Skipping.')
+            log.warning('Couldn\'t find .par file! Fit must have failed. Skipping.')
             noutputs = len(parameters.__dict__) - 7 + 3 # - header + name,x,y
             data.append([np.nan,] * noutputs)
         
