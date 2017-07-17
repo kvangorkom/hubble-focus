@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from copy import deepcopy
-import json 
+import json
+import pkg_resources
 
 class InputParams(object):
     '''
@@ -94,7 +95,7 @@ def get_input_defaults(filepath=None):
     pass back a dictionary of the default parameters(as Parameter objects).
     '''
     if filepath is None:
-        filepath = 'focus_templates.json'
+        filepath = pkg_resources.resource_filename(__name__,'focus_templates.json')
     with open(filepath) as f:
         templates = json.load(f)
 

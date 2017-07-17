@@ -9,14 +9,11 @@ import os
 
 from collections import OrderedDict
 
-#TEMPORARY!!!!
-import sys
-sys.path.append('../model')
-import focusmodel
-
 import logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+from . import focusmodel
 
 class Analysis(object):
     ''' Create an object that queries the focus archive,
