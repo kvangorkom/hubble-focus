@@ -60,9 +60,9 @@ def orbital(times,interpolate_onto_times=False,thermal_path='/grp/hst/OTA/therma
         assert len(times) > 2, 'Cannot interpolate onto {} points'.format(len(times))
 
     # Get temperatures in native telemetry time sampling
-    extra_time = 1. / 24. # add one hour to both ends of times requested
-    start_time = min(times) - extra_time
-    end_time = max(times) + extra_time
+    extra_time = 1. # add a day to both ends of times requested
+    start_time = np.min(times) - extra_time
+    end_time = np.max(times) + extra_time
     temperatures = get_temperatures(start_time, end_time, path=thermal_path)
 
     # Get orbital breathing in telemetry time sampling
