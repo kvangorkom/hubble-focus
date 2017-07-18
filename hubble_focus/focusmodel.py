@@ -215,6 +215,8 @@ def get_temperatures(start_time=None,end_time=None,path='/grp/hst/OTA/thermal'):
     # This is inefficient, but we read in every temperature
     fnames = sorted(glob(os.path.join(path, 'thermalData*.dat')))
 
+    assert len(fnames) > 0, 'No files matching "thermalData*.dat" found at "{}"!'.format(os.path.abspath(path))
+
     # Parse each file
     temp_list = []
     for f in fnames:
