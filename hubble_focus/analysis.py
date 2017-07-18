@@ -1,17 +1,18 @@
-from astropy import time as atime
-from scipy.optimize import curve_fit
-from scipy.interpolate import interp1d
+from collections import OrderedDict
 import datetime
 from glob import glob
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-
-from collections import OrderedDict
+import warnings
 
 import logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+from astropy import time as atime
+from scipy.optimize import curve_fit
+from scipy.interpolate import interp1d
 
 from . import focusmodel
 
@@ -201,13 +202,16 @@ class Analysis(object):
         visit_means.update({c+'_std' : [] for c in columns})
         visit_means.update({d  : [] for d in drop})
         nonecheck = lambda x : x is not None
-        for v in visits: #average numeric data
-            for c in columns:
-                visit_means[c+'_mean'].append(np.nanmean(list(filter(nonecheck,self.fitpsf[c][v]))))
-                visit_means[c+'_std'].append(np.nanstd(list(filter(nonecheck,self.fitpsf[c][v]))))
-        for v in visits: #get representative value for non-numeric
-            for d in drop:
-                visit_means[d].append(self.fitpsf[d][v][0])
+        
+        with warnings.catch_warnings(): # catch 'mean of empty slice' warnings, which are expected
+            warnings.simplefilter('ignore', category = RuntimeWarning)
+            for v in visits: #average numeric data
+                for c in columns:
+                    visit_means[c+'_mean'].append(np.nanmean(list(filter(nonecheck,self.fitpsf[c][v]))))
+                    visit_means[c+'_std'].append(np.nanstd(list(filter(nonecheck,self.fitpsf[c][v]))))
+            for v in visits: #get representative value for non-numeric
+                for d in drop:
+                    visit_means[d].append(self.fitpsf[d][v][0])
 
         #Now turn all lists into ndarrays
         for c in visit_means.keys():
@@ -637,7 +641,7 @@ def add_visit(dirname, alldict):
     files = glob(directory)
 
     for f in files:
-        log.info('Adding: {}'.format(f))
+        log.debug('Adding: {}'.format(f))
         parsed = _parse_fitpsf(f)
         for line in parsed:
             for i, key in enumerate(keys):
