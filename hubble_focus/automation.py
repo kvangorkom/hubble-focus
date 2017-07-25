@@ -409,3 +409,8 @@ def polyval2d(x,y,coeffs):
     order = int(np.sqrt(len(coeffs)))
     square_coeffs = np.asarray(coeffs).reshape(order,order)
     return np.polynomial.polynomial.polyval2d(x,y,square_coeffs)
+
+def polygrid2d(x,y,coeffs):
+    order = int(np.sqrt(len(coeffs)))
+    square_coeffs = np.asarray(coeffs).reshape(order,order)
+    return np.polynomial.polynomial.polygrid2d(x,y,square_coeffs)
