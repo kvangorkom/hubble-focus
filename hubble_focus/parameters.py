@@ -1,7 +1,10 @@
 from collections import OrderedDict
 from copy import deepcopy
 import json
+import os
 import pkg_resources
+
+import numpy as np
 
 class InputParams(object):
     '''
@@ -9,7 +12,7 @@ class InputParams(object):
     '''
 
     def __init__(self, camera_mode, nfiles=1, filepath=None):
-        super().__setattr__( '_odict',  OrderedDict()  )
+        super(InputParams, self).__setattr__( '_odict',  OrderedDict()  ) # for python 2 compatibility
 
         defaults = get_input_defaults(filepath)
         
@@ -56,10 +59,10 @@ class InputParams(object):
             f.write(self.as_string)
         
     def __getattr__(self, key):
-        odict = super().__getattribute__('_odict')
+        odict = super(InputParams, self).__getattribute__('_odict')
         if key in odict:
             return odict[key]
-        return super().__getattribute__(key)
+        return super(InputParams, self).__getattribute__(key)
 
     def __setattr__(self, key, val):
         self._odict[key] = val
@@ -73,7 +76,7 @@ class InputParams(object):
         return state
 
     def __setstate__(self, state): # Support copy.copy
-        super().__setattr__( '_odict', OrderedDict() )
+        super(InputParams, self).__setattr__( '_odict', OrderedDict() )
         self.__dict__.update( state )
 
 class Parameter(object):
@@ -119,3 +122,72 @@ def get_input_defaults(filepath=None):
             'acswfc1' : acswfc1_defaults,
             'acswfc2' : acswfc2_defaults,
             'multi_params' : multi_params}
+
+# --- Functions for running as part of manual processing with wfit ---
+
+def get_file_list(filename):
+    with open(filename) as f:
+        return f.read().splitlines()
+
+def parse_dat(filename):
+    with open(filename) as f:
+        line = f.readlines()[-1]
+        x = int(line.split()[0])
+        y = int(line.split()[1])
+    return x, y
+
+def get_coefficients(camera, term, chip):
+    basename =  '{}_{}_chip{}.txt'.format(camera, term, chip)
+    filename = pkg_resources.resource_filename(__name__, os.path.join('coefficients',basename))
+    return np.loadtxt(filename)
+
+def make_fitpsf_script(filelist, outname):
+    text = ''
+    for f in files:
+        text = text + 'fitpsf, "{}",0,1,/EE\n'.format(f)
+    with open(outname,'w+') as f:
+        f.write(text)
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('camera', type=str, help='camera: ACS or WFC3', choices=['ACS', 'WFC3'])
+    parser.add_argument('chip', type=int, help='chip: 1 or 2', choices=[1, 2])
+    args = parser.parse_args()
+
+    if args.camera == 'ACS':
+        cam = 'acswfc'
+        camchip = cam + str(args.chip)
+        filelist = 'wfc'
+        doname = 'dowfc.pro'
+    if args.camera == 'WFC3':
+        cam = 'wfc3uvis'
+        camchip = cam + str(args.chip)
+        filelist = camchip.upper()
+        doname = 'dowfc3.pro'
+
+    template = InputParams(camchip)
+    files = get_file_list(filelist)
+
+    terms = ['xcoma', 'ycoma', 'xastig', 'yastig', 'spherical']
+
+    for f in files:
+        inputs = deepcopy(template)
+        # get xy from .dat files
+        x, y = parse_dat(f + '.dat') 
+        
+        if args.camera == 'WFC3':
+            for term in terms:
+                # get coefficients for camchip
+                coeffs = get_coefficients(cam, term, args.chip)
+                # modify inputparams by evaluating coefficients for x, y
+                getattr(inputs, term).value = np.polynomial.polynomial.polyval2d(x,y,coeffs)
+                getattr(inputs, term).fit = 'N'
+            # fix blur
+            inputs.blur.fit = 'N'
+
+        # save out inputparams
+        inputs.to_file(f + '.in')
+        
+    # save out .pro file
+    make_fitpsf_script(files, doname)
