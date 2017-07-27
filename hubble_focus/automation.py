@@ -393,24 +393,24 @@ def parse_par(filename,nstars):
     return np.asarray(data,dtype=object)
 
 def polyfit2d(x,y,z,order=3):
-    
-    init_coeffs = [0,] * order * order
+    nterms = order + 1
+    init_coeffs = [0,] * nterms * nterms
     result =  least_squares(polylsq, init_coeffs,
-                            args = (x,y,z,order),
+                            args = (x,y,z,nterms),
                             loss = 'soft_l1',
                             f_scale = 0.1)
     return result['x']
     
-def polylsq(coeffs,x,y,z,order):
-    coeffs = np.asarray(coeffs).reshape(order,order)
+def polylsq(coeffs,x,y,z,nterms):
+    coeffs = np.asarray(coeffs).reshape(nterms,nterms)
     return z -  np.polynomial.polynomial.polyval2d(x,y,coeffs)
 
 def polyval2d(x,y,coeffs):
-    order = int(np.sqrt(len(coeffs)))
-    square_coeffs = np.asarray(coeffs).reshape(order,order)
+    nterms = int(np.sqrt(len(coeffs)))
+    square_coeffs = np.asarray(coeffs).reshape(nterms,nterms)
     return np.polynomial.polynomial.polyval2d(x,y,square_coeffs)
 
 def polygrid2d(x,y,coeffs):
-    order = int(np.sqrt(len(coeffs)))
-    square_coeffs = np.asarray(coeffs).reshape(order,order)
+    nterms = int(np.sqrt(len(coeffs)))
+    square_coeffs = np.asarray(coeffs).reshape(nterms,nterms)
     return np.polynomial.polynomial.polygrid2d(x,y,square_coeffs)
